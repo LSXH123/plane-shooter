@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>打飞机 · Plane Shooter</title>
+<style>
+  :root {
+    --bg: #0a0f1e;
+    --text: #e6f0ff;
+    --accent: #4dd0ff;
+    --danger: #ff5c7a;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%;
+    height: 100%;
+    background: var(--bg);
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    color: var(--text);
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #game {
+    display: block;
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    cursor: crosshair;
+  }
+  #hud {
+    position: absolute;
+    top: 14px;
+    left: 16px;
+    right: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    pointer-events: none;
+    font-size: 15px;
+    letter-spacing: 0.5px;
+  }
+  #hud .left, #hud .right { display: flex; flex-direction: column; gap: 6px; }
+  #hud .right { align-items: flex-end; }
+  .pill {
+    background: rgba(10, 15, 30, 0.55);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    padding: 6px 12px;
+    backdrop-filter: blur(4px);
+  }
+  .pill b { color: var(--accent); font-variant-numeric: tabular-nums; }
+  #lives .hearts { color: var(--danger); letter-spacing: 3px; font-size: 16px; }
+  #overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    background: radial-gradient(circle at 50% 40%, rgba(30,45,80,0.75), rgba(6,9,18,0.92));
+    text-align: center;
+    pointer-events: auto;
+  }
+  #overlay.hidden { display: none; }
+  #overlay h1 {
+    font-size: clamp(34px, 8vw, 64px);
+    font-weight: 800;
+    background: linear-gradient(180deg, #fff, #7fd8ff);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    text-shadow: 0 0 30px rgba(77,208,255,0.35);
+  }
+  #overlay p { color: #9fb2d0; max-width: 460px; line-height: 1.7; padding: 0 20px; }
+  #overlay .sub { font-size: 18px; }
+  #overlay .controls { font-size: 13px; color: #6f83a5; }
+  #overlay .controls span { display: inline-block; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 5px; padding: 1px 7px; margin: 2px; }
+  button {
+    pointer-events: auto;
+    font: inherit;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: #04121c;
+    background: linear-gradient(180deg, #7fd8ff, #2aa8e8);
+    border: none;
+    border-radius: 12px;
+    padding: 14px 44px;
+    cursor: pointer;
+    box-shadow: 0 6px 24px rgba(42,168,232,0.4);
+    transition: transform 0.08s ease, box-shadow 0.2s ease;
+  }
+  button:hover { box-shadow: 0 8px 32px rgba(42,168,232,0.6); }
+  button:active { transform: scale(0.96); }
+  #finalScore { font-size: 26px; }
+  #finalScore b { color: var(--accent); }
+  #hi { color: #ffd66b; }
+</style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="hud">
+    <div class="left">
+      <div class="pill">分数 <b id="score">0</b></div>
+      <div class="pill" id="lives">生命 <span class="hearts" id="hearts">❤❤❤</span></div>
+    </div>
+    <div class="right">
+      <div class="pill">波次 <b id="wave">1</b></div>
+      <div class="pill">最高分 <b id="hiScore">0</b></div>
+    </div>
+  </div>
+
+  <div id="overlay">
+    <h1>打飞机</h1>
+    <p class="sub">驾驶战机，消灭敌机，挑战更高分！</p>
+    <p class="controls">
+      <span>← → 或 A D</span> 移动 &nbsp;·&nbsp; <span>空格</span> 射击<br>
+      也可以直接用 <span>鼠标 / 触摸</span> 控制飞机
+    </p>
+    <button id="startBtn">开始游戏</button>
+    <p id="hi"></p>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  const scoreEl = document.getElementById("score");
+  const waveEl = document.getElementById("wave");
+  const hiScoreEl = document.getElementById("hiScore");
+  const heartsEl = document.getElementById("hearts");
+  const overlay = document.getElementById("overlay");
+  const startBtn = document.getElementById("startBtn");
+  const finalScoreEl = document.createElement("p");
+  finalScoreEl.id = "finalScore";
+
+  const DPR = Math.min(window.devicePixelRatio || 1, 2);
+  let W = 0, H = 0;
+
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W * DPR;
+    canvas.height = H * DPR;
+    canvas.style.width = W + "px";
+    canvas.style.height = H + "px";
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  // ---------- state ----------
+  const keys = {};
+  const mouse = { x: W / 2, y: H - 100, down: false };
+  let player, bullets, enemies, enemyBullets, particles, powerups;
+  let score, lives, wave, spawnTimer, fireTimer, gameOver, running;
+  let hiScore = Number(localStorage.getItem("plane-shooter-hi") || 0);
+  hiScoreEl.textContent = hiScore;
+
+  // ---------- audio ----------
+  let audioCtx = null;
+  function beep(freq, dur, type, vol) {
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = type || "square";
+      o.frequency.value = freq;
+      g.gain.value = vol || 0.06;
+      g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + dur);
+      o.connect(g).connect(audioCtx.destination);
+      o.start();
+      o.stop(audioCtx.currentTime + dur);
+    } catch (e) {}
+  }
+  const sfx = {
+    shoot: () => beep(880, 0.06, "square", 0.04),
+    hit:   () => beep(220, 0.12, "sawtooth", 0.08),
+    boom:  () => beep(90, 0.35, "sawtooth", 0.12),
+    hurt:  () => beep(140, 0.4, "triangle", 0.14),
+  };
+
+  // ---------- helpers ----------
+  function rand(a, b) { return a + Math.random() * (b - a); }
+  function dist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
+
+  // ---------- entities ----------
+  function makePlayer() {
+    return {
+      x: W / 2, y: H - 90, r: 16,
+      speed: 420, fireRate: 0.16, power: 1, inv: 0
+    };
+  }
+  function makeEnemy() {
+    const types = [
+      { r: 14, hp: 1, speed: 120, color: "#ff5c7a", score: 100 },
+      { r: 20, hp: 3, speed: 70,  color: "#ffa94d", score: 300 },
+      { r: 26, hp: 6, speed: 45,  color: "#b197fc", score: 600 },
+    ];
+    // larger enemies appear in later waves
+    let idx = Math.random() < 0.08 * wave ? 2 : (Math.random() < 0.18 * wave ? 1 : 0);
+    idx = Math.min(idx, 2);
+    const t = types[idx];
+    return {
+      x: rand(t.r, W - t.r), y: -t.r - 10,
+      r: t.r, hp: t.hp, maxHp: t.hp, speed: t.speed * rand(0.85, 1.25),
+      color: t.color, score: t.score, shootTimer: rand(0.5, 2.2), type: idx
+    };
+  }
+  function makeEnemyBullet(e) {
+    const ang = Math.atan2(player.y - e.y, player.x - e.x);
+    return { x: e.x, y: e.y, vx: Math.cos(ang) * 210, vy: Math.sin(ang) * 210, r: 4 };
+  }
+
+  // ---------- game flow ----------
+  function reset() {
+    player = makePlayer();
+    bullets = []; enemies = []; enemyBullets = []; particles = []; powerups = [];
+    score = 0; lives = 3; wave = 1; spawnTimer = 0; fireTimer = 0; gameOver = false;
+    running = true;
+    updateHUD();
+  }
+
+  function start() {
+    if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+    overlay.classList.add("hidden");
+    reset();
+  }
+
+  function endGame() {
+    gameOver = true; running = false;
+    sfx.hurt();
+    if (score > hiScore) {
+      hiScore = score;
+      localStorage.setItem("plane-shooter-hi", hiScore);
+      hiScoreEl.textContent = hiScore;
+    }
+    finalScoreEl.innerHTML = "本局得分 <b>" + score + "</b>";
+    overlay.querySelector("h1").textContent = "游戏结束";
+    overlay.querySelector(".sub").textContent = "别灰心，再试一次！";
+    overlay.querySelector(".controls").style.display = "none";
+    startBtn.textContent = "再来一局";
+    // re-insert final score before the button
+    if (!finalScoreEl.parentNode) overlay.insertBefore(finalScoreEl, startBtn);
+    overlay.querySelector("#hi").textContent = hiScore >= score && hiScore ? "最高分 " + hiScore : "";
+    overlay.classList.remove("hidden");
+  }
+
+  function updateHUD() {
+    scoreEl.textContent = score;
+    waveEl.textContent = wave;
+    heartsEl.textContent = "❤".repeat(Math.max(0, lives));
+  }
+
+  // ---------- shooting ----------
+  function shoot() {
+    sfx.shoot();
+    const p = player;
+    bullets.push({ x: p.x, y: p.y - 16, vy: -640, r: 4 });
+    if (p.power >= 2) {
+      bullets.push({ x: p.x - 10, y: p.y - 10, vy: -640, r: 4 });
+      bullets.push({ x: p.x + 10, y: p.y - 10, vy: -640, r: 4 });
+    }
+    if (p.power >= 3) {
+      bullets.push({ x: p.x - 6, y: p.y - 22, vy: -700, r: 4 });
+      bullets.push({ x: p.x + 6, y: p.y - 22, vy: -700, r: 4 });
+    }
+  }
+
+  // ---------- particles ----------
+  function burst(x, y, color, n) {
+    for (let i = 0; i < n; i++) {
+      const a = rand(0, Math.PI * 2), s = rand(40, 260);
+      particles.push({
+        x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+        r: rand(1.5, 3.5), life: rand(0.3, 0.8), t: 0, color
+      });
+    }
+  }
+
+  // ---------- update ----------
+  function update(dt) {
+    if (!running) return;
+    const p = player;
+
+    // movement
+    let dx = 0, dy = 0;
+    if (keys["ArrowLeft"] || keys["a"] || keys["A"]) dx -= 1;
+    if (keys["ArrowRight"] || keys["d"] || keys["D"]) dx += 1;
+    if (keys["ArrowUp"] || keys["w"] || keys["W"]) dy -= 1;
+    if (keys["ArrowDown"] || keys["s"] || keys["S"]) dy += 1;
+    if (dx && dy) { dx *= 0.7071; dy *= 0.7071; }
+
+    if (mouse.down) {
+      const k = 10 * dt;
+      p.x += (mouse.x - p.x) * k;
+      p.y += (mouse.y - p.y) * k;
+    } else {
+      p.x += dx * p.speed * dt;
+      p.y += dy * p.speed * dt;
+    }
+    p.x = Math.max(p.r, Math.min(W - p.r, p.x));
+    p.y = Math.max(p.r, Math.min(H - p.r, p.y));
+    if (p.inv > 0) p.inv -= dt;
+
+    // fire
+    fireTimer -= dt;
+    if ((keys[" "] || keys["Space"] || mouse.down) && fireTimer <= 0) {
+      shoot();
+      fireTimer = p.fireRate;
+    }
+
+    // spawn enemies
+    spawnTimer -= dt;
+    const spawnInterval = Math.max(0.28, 1.1 - wave * 0.08);
+    if (spawnTimer <= 0) {
+      enemies.push(makeEnemy());
+      spawnTimer = spawnInterval * rand(0.7, 1.3);
+    }
+
+    // bullets
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i];
+      b.y += b.vy * dt;
+      if (b.y < -20) bullets.splice(i, 1);
+    }
+
+    // enemies
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const e = enemies[i];
+      e.y += e.speed * dt;
+      e.shootTimer -= dt;
+      if (e.shootTimer <= 0 && e.y > 30 && e.y < H * 0.6) {
+        enemyBullets.push(makeEnemyBullet(e));
+        e.shootTimer = rand(1.2, 2.6) - wave * 0.05;
+      }
+      if (e.y > H + 40) { enemies.splice(i, 1); continue; }
+      // collide with player
+      if (dist(e.x, e.y, p.x, p.y) < e.r + p.r && p.inv <= 0) {
+        hitPlayer();
+        enemies.splice(i, 1);
+        continue;
+      }
+      // collide with player bullets
+      for (let j = bullets.length - 1; j >= 0; j--) {
+        if (dist(e.x, e.y, bullets[j].x, bullets[j].y) < e.r + bullets[j].r) {
+          e.hp--; bullets.splice(j, 1);
+          burst(bullets[j].x, bullets[j].y, "#8ff", 4);
+          sfx.hit();
+          if (e.hp <= 0) {
+            burst(e.x, e.y, e.color, e.type === 2 ? 40 : 22);
+            sfx.boom();
+            score += e.score;
+            // maybe drop powerup
+            if (Math.random() < 0.1 && p.power < 3) {
+              powerups.push({ x: e.x, y: e.y, vy: 90, r: 10, t: 0 });
+            }
+            enemies.splice(i, 1);
+          }
+          break;
+        }
+      }
+    }
+
+    // enemy bullets
+    for (let i = enemyBullets.length - 1; i >= 0; i--) {
+      const b = enemyBullets[i];
+      b.x += b.vx * dt; b.y += b.vy * dt;
+      if (b.y > H + 20 || b.x < -20 || b.x > W + 20) { enemyBullets.splice(i, 1); continue; }
+      if (dist(b.x, b.y, p.x, p.y) < b.r + p.r && p.inv <= 0) {
+        enemyBullets.splice(i, 1);
+        hitPlayer();
+      }
+    }
+
+    // powerups
+    for (let i = powerups.length - 1; i >= 0; i--) {
+      const u = powerups[i];
+      u.y += u.vy * dt; u.t += dt;
+      if (u.y > H + 20) { powerups.splice(i, 1); continue; }
+      if (dist(u.x, u.y, p.x, p.y) < u.r + p.r) {
+        p.power = Math.min(3, p.power + 1);
+        p.fireRate = Math.max(0.1, p.fireRate - 0.03);
+        burst(u.x, u.y, "#ffd66b", 20);
+        powerups.splice(i, 1);
+      }
+    }
+
+    // particles
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const pt = particles[i];
+      pt.t += dt; pt.x += pt.vx * dt; pt.y += pt.vy * dt;
+      pt.vx *= 0.98; pt.vy *= 0.98;
+      if (pt.t >= pt.life) particles.splice(i, 1);
+    }
+
+    // wave progression
+    const nextWave = Math.floor(score / 1500) + 1;
+    if (nextWave > wave) {
+      wave = nextWave;
+      beep(523, 0.12, "square", 0.05);
+      beep(659, 0.12, "square", 0.05);
+    }
+
+    updateHUD();
+  }
+
+  function hitPlayer() {
+    lives--;
+    sfx.hurt();
+    burst(player.x, player.y, "#ff5c7a", 26);
+    player.inv = 1.5;
+    if (lives <= 0) endGame();
+    updateHUD();
+  }
+
+  // ---------- draw ----------
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    // starfield
+    ctx.fillStyle = "rgba(255,255,255,0.6)";
+    for (let i = 0; i < 70; i++) {
+      const sx = (i * 137.5 + (performance.now() * 0.02 * (i % 3 + 1))) % W;
+      const sy = (i * 89.3) % H;
+      ctx.globalAlpha = 0.2 + (i % 4) * 0.2;
+      ctx.fillRect(sx, sy, 2, 2);
+    }
+    ctx.globalAlpha = 1;
+
+    // powerups
+    for (const u of powerups) {
+      ctx.save();
+      ctx.translate(u.x, u.y);
+      ctx.rotate(u.t * 3);
+      ctx.fillStyle = "#ffd66b";
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < 4; i++) {
+        ctx.rotate(Math.PI / 2);
+        ctx.lineTo(0, -u.r); ctx.lineTo(u.r * 0.4, 0); ctx.lineTo(0, u.r);
+      }
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.restore();
+    }
+
+    // enemies
+    for (const e of enemies) drawEnemy(e);
+
+    // player
+    drawPlayer();
+
+    // bullets
+    ctx.fillStyle = "#7fd8ff";
+    for (const b of bullets) {
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = "#ff8fa3";
+    for (const b of enemyBullets) {
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // particles
+    for (const pt of particles) {
+      ctx.globalAlpha = Math.max(0, 1 - pt.t / pt.life);
+      ctx.fillStyle = pt.color;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, pt.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawPlayer() {
+    const p = player;
+    if (p.inv > 0 && Math.floor(p.inv * 12) % 2 === 0) return; // blink
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.fillStyle = "#4dd0ff";
+    ctx.strokeStyle = "#dff4ff";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, -18);
+    ctx.lineTo(6, -4);
+    ctx.lineTo(16, 10);
+    ctx.lineTo(8, 8);
+    ctx.lineTo(5, 14);
+    ctx.lineTo(0, 11);
+    ctx.lineTo(-5, 14);
+    ctx.lineTo(-8, 8);
+    ctx.lineTo(-16, 10);
+    ctx.lineTo(-6, -4);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    // flame
+    ctx.fillStyle = "rgba(255,170,80," + rand(0.6, 1) + ")";
+    ctx.beginPath();
+    ctx.moveTo(-4, 11); ctx.lineTo(0, 11 + rand(8, 20)); ctx.lineTo(4, 11);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawEnemy(e) {
+    ctx.save();
+    ctx.translate(e.x, e.y);
+    if (e.type === 0) {
+      ctx.fillStyle = e.color;
+      ctx.beginPath();
+      ctx.moveTo(0, e.r); ctx.lineTo(e.r * 0.8, -e.r * 0.4); ctx.lineTo(0, -e.r);
+      ctx.lineTo(-e.r * 0.8, -e.r * 0.4);
+      ctx.closePath(); ctx.fill();
+    } else if (e.type === 1) {
+      ctx.fillStyle = e.color;
+      ctx.beginPath();
+      ctx.arc(0, 0, e.r, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#0a0f1e";
+      ctx.beginPath(); ctx.arc(0, 0, e.r * 0.45, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.fillStyle = e.color;
+      for (let i = 0; i < 6; i++) {
+        ctx.rotate(Math.PI / 3);
+        ctx.beginPath();
+        ctx.moveTo(0, -e.r); ctx.lineTo(e.r * 0.45, -e.r * 0.45); ctx.lineTo(e.r * 0.45, e.r * 0.45); ctx.lineTo(0, e.r);
+        ctx.closePath(); ctx.fill();
+      }
+    }
+    // hp bar for multi-hp
+    if (e.maxHp > 1 && e.hp < e.maxHp) {
+      ctx.fillStyle = "rgba(255,255,255,0.25)";
+      ctx.fillRect(-e.r, -e.r - 8, e.r * 2, 4);
+      ctx.fillStyle = "#7fd8ff";
+      ctx.fillRect(-e.r, -e.r - 8, e.r * 2 * (e.hp / e.maxHp), 4);
+    }
+    ctx.restore();
+  }
+
+  // ---------- loop ----------
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // ---------- input ----------
+  window.addEventListener("keydown", (e) => {
+    keys[e.key] = true;
+    if (e.key === " ") e.preventDefault();
+    if (e.key === "Enter" && !running) start();
+    if ((e.key === " " || e.key === "ArrowUp" || e.key === "ArrowDown") && overlay.classList.contains("hidden") === false && running) {
+      // allow starting with space on the start screen is handled by Enter only
+    }
+  });
+  window.addEventListener("keyup", (e) => { keys[e.key] = false; });
+
+  canvas.addEventListener("mousemove", (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
+  canvas.addEventListener("mousedown", (e) => { mouse.down = true; mouse.x = e.clientX; mouse.y = e.clientY; });
+  window.addEventListener("mouseup", () => { mouse.down = false; });
+  canvas.addEventListener("touchmove", (e) => {
+    e.preventDefault();
+    const t = e.touches[0];
+    mouse.x = t.clientX; mouse.y = t.clientY; mouse.down = true;
+  }, { passive: false });
+  canvas.addEventListener("touchend", () => { mouse.down = false; });
+
+  startBtn.addEventListener("click", start);
+})();
+</script>
+</body>
+</html>
